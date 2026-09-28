@@ -29,6 +29,17 @@ public static class VehicleReviewBridge
         try
         {
             if (command == "inspect") Inspect();
+            else if(command=="refresh") AssetDatabase.Refresh();
+            else if(command=="calibrate-clearance")
+            {
+                if(EditorApplication.isPlaying) throw new InvalidOperationException("Stop Play Mode first.");
+                var importer=(ModelImporter)AssetImporter.GetAtPath("Assets/Art/Vehicles/CarRapide/Car rapide.fbx");
+                if(!importer.isReadable) { importer.isReadable=true; importer.SaveAndReimport(); }
+                var points=UnityEngine.Object.FindAnyObjectByType<VehicleInteractionPoints>();
+                CarRapide.EditorTools.VehicleExperienceInstaller.CalibrateCabin(points);
+                UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(points.gameObject.scene);
+                UnityEditor.SceneManagement.EditorSceneManager.SaveScene(points.gameObject.scene);
+            }
             else if (command == "install") CarRapide.EditorTools.VehicleExperienceInstaller.Install();
             else if (command == "play") EditorApplication.isPlaying = true;
             else if (command == "stop") EditorApplication.isPlaying = false;
@@ -40,6 +51,7 @@ public static class VehicleReviewBridge
             else if (command == "review-video") CarRapide.EditorTools.VehicleExperienceReview.BeginVideo();
             else if (command == "review-passenger") CarRapide.EditorTools.VehicleExperienceReview.BeginPassenger();
             else if (command == "snapshot") Snapshot();
+            else if (command == "probe-poses") ProbePoses();
             else if (command == "bake") CarRapide.EditorTools.VehicleMotionBaker.Bake();
             else if (command == "scale-preview")
             {
@@ -77,6 +89,8 @@ public static class VehicleReviewBridge
                 s.AppendLine($" submesh={sub} triangles={indices.Length/3} material={materials[sub].name} shader={materials[sub].shader.name} color={materials[sub].color} min={sb.min.ToString("F4")} max={sb.max.ToString("F4")}");
             }
             File.WriteAllLines(Folder + "/mesh-" + m.name.Replace("/", "_") + ".csv", points.Select(p => FormattableString.Invariant($"{p.x:R},{p.y:R},{p.z:R}")));
+            var indicesAll=mesh.triangles;
+            File.WriteAllLines(Folder+"/tri-"+m.name+".csv",Enumerable.Range(0,indicesAll.Length/3).Select(i=>$"{indicesAll[i*3]},{indicesAll[i*3+1]},{indicesAll[i*3+2]}"));
             if(m.name=="Carosserie" || m.name=="Porte_avant_gauche" || m.name=="Porte_avant_droit")
             {
                 File.WriteAllLines(Folder+"/uv-"+m.name+".csv",mesh.uv.Select(p=>FormattableString.Invariant($"{p.x:R},{p.y:R}")));
@@ -119,6 +133,7 @@ public static class VehicleReviewBridge
     {
         var e=UnityEngine.Object.FindAnyObjectByType<VehicleDriverExperience>();
         var s=new StringBuilder();
+        s.AppendLine(e.Clearance.GeometrySummary);
         s.AppendLine($"ready={e.Ready} seated={e.Driver.IsSeated} boarding={e.Driver.IsBoarding} action={e.Driver.CurrentAction} starting={e.Engine.IsStarting} running={e.Engine.IsRunning} canDrive={e.GetComponent<VehicleController>().CanDrive}");
         var controller=e.GetComponent<VehicleController>();
         var body=e.GetComponent<Rigidbody>();
@@ -133,6 +148,60 @@ public static class VehicleReviewBridge
                 s.AppendLine($" {bone} {e.transform.InverseTransformPoint(rig.Animator.GetBoneTransform(bone).position).ToString("F4")}");
         }
         File.WriteAllText(Folder+"/snapshot.txt",s.ToString());
+    }
+    [Serializable] public class PoseSample
+    {
+        public string name;
+        public CharacterContactRig.Pose pose;
+        public float doorAngle, penetration, contactError;
+        public string contact;
+        public Vector4 errors;
+        public Vector3 head;
+        public bool anatomy;
+        public Vector3[] bones;
+        public Vector3 steeringOffset;
+        public bool passenger;
+        public float rearDoorAngle;
+    }
+    [Serializable] public class PoseBatch { public PoseSample[] samples; }
+    static void ProbePoses()
+    {
+        var e=UnityEngine.Object.FindAnyObjectByType<VehicleDriverExperience>();
+        if(!EditorApplication.isPlaying || !e.Ready || e.Driver.IsBoarding)
+            throw new InvalidOperationException("Pose probes require an idle Play Mode session.");
+        var batch=JsonUtility.FromJson<PoseBatch>(File.ReadAllText(Folder+"/poses.json"));
+        var rig=batch.samples.Length>0 && batch.samples[0].passenger ? e.Passenger.Rig : e.Driver.Rig;
+        var original=rig.CurrentPose; float angle=e.Door.OpenAngle;
+        var rear=e.GetComponent<VehicleInteractionPoints>().rearDoorMesh;
+        var originalRear=rear.localRotation;
+        var rearAxis=rear.parent.InverseTransformDirection(e.transform.up);
+        var wheel=e.transform.Find("Car rapide").GetComponentsInChildren<MeshFilter>().First(m=>m.name=="Volant").transform;
+        var originalWheel=wheel.position;
+        try
+        {
+            foreach(var sample in batch.samples)
+            {
+                wheel.position=originalWheel+e.transform.TransformVector(sample.steeringOffset);
+                e.Door.SetOpening(sample.doorAngle);
+                rear.localRotation=Quaternion.AngleAxis(sample.rearDoorAngle-e.Passenger.DoorAngle,rearAxis)*originalRear;
+                rig.SetPose(sample.pose); rig.ApplyPose();
+                sample.penetration=e.Clearance.Measure(rig.Animator);
+                sample.contact=e.Clearance.WorstContact; sample.contactError=rig.MaxContactError;
+                sample.errors=rig.ContactErrors;
+                sample.head=e.transform.InverseTransformPoint(rig.Animator.GetBoneTransform(HumanBodyBones.Head).position);
+                if(sample.anatomy)
+                {
+                    sample.bones=new Vector3[23];
+                    for(int i=0;i<23;i++)
+                    {
+                        var bone=rig.Animator.GetBoneTransform((HumanBodyBones)i);
+                        if(bone) sample.bones[i]=e.transform.InverseTransformPoint(bone.position);
+                    }
+                }
+            }
+            File.WriteAllText(Folder+"/pose-results.json",JsonUtility.ToJson(batch));
+        }
+        finally {wheel.position=originalWheel; rear.localRotation=originalRear; e.Door.SetOpening(angle); rig.SetPose(original); rig.ApplyPose();}
     }
 }
 #endif

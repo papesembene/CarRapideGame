@@ -20,9 +20,12 @@ namespace CarRapide.EditorTools
         static Quaternion initialRotation;
         static readonly float[] audioSamples=new float[512];
         static float peakAudio;
+        static float peakPenetration;
+        static string worstPenetration;
         static MediaEncoder video;
         static VehicleReviewAudioCapture recordedAudio;
         static bool captureRateChanged;
+        static bool backgroundChanged, previousBackground;
         static int videoFrame, previousCaptureRate;
         static Keyboard keyboard;
         static Vector3 origin;
@@ -45,12 +48,22 @@ namespace CarRapide.EditorTools
             var e=Object.FindAnyObjectByType<VehicleDriverExperience>();
             if(!e || !e.Ready || e.Driver.IsBoarding || e.Driver.IsSeated) throw new System.InvalidOperationException("Review requires a fresh Play Mode session.");
             File.WriteAllText(Folder+"/checks.txt","Unity "+Application.unityVersion+"\n");
+            File.WriteAllText(Folder+"/poses.jsonl","");
+            var initialPose=e.Driver.Rig.CurrentPose;
+            var obstructing=DriverController.Standing(new Vector3(-1.67f,-.056f,1.30f),90);
+            e.Driver.Rig.SetPose(obstructing); e.Driver.Rig.ApplyPose(); e.Door.SetOpening(76);
+            bool refused=!e.Door.TryCloseTo(0,e.Driver.Rig);
+            Check(refused && e.Door.IsBlocked && !e.Door.IsClosed,"Door sweep stops at an obstructing body");
+            e.Driver.Rig.SetPose(initialPose); e.Driver.Rig.ApplyPose();
+            Check(e.Door.TryCloseTo(0,e.Driver.Rig) && e.Door.IsClosed,"Door closes after the obstruction clears");
+            EnableBackgroundReview();
             keyboard=InputSystem.AddDevice<Keyboard>();
             VehicleMotionBaker.Begin(e.Driver.GetComponent<DriverAnimationController>());
             InputSystem.onBeforeUpdate+=InjectInput;
             origin=e.transform.position;
             initialRotation=e.transform.rotation;
             peakSpeed=greatestContactError=peakAudio=0; braked=observedIgnition=false; ignitionStayedLocked=true;
+            peakPenetration=0; worstPenetration="none";
             start=Time.time; nextCapture=0; frame=0; active=true; boarded=started=false;
             EditorApplication.update-=Tick; EditorApplication.update+=Tick;
         }
@@ -82,8 +95,10 @@ namespace CarRapide.EditorTools
             if(!e || !e.Ready || e.Engine.IsRunning || e.Driver.IsBoarding || e.Passenger.IsBusy)
                 throw new System.InvalidOperationException("Passenger review requires a parked vehicle.");
             passengerReview=true; Directory.CreateDirectory(Folder);
-            passengerSat=false; greatestContactError=0;
+            EnableBackgroundReview();
+            passengerSat=false; greatestContactError=0; peakPenetration=0; worstPenetration="none";
             File.WriteAllText(Folder+"/checks.txt","Passenger review\n");
+            File.WriteAllText(Folder+"/poses.jsonl","");
             start=Time.time; nextCapture=0; frame=0; active=true;
             e.Passenger.RequestDemo();
             EditorApplication.update-=Tick; EditorApplication.update+=Tick;
@@ -107,6 +122,11 @@ namespace CarRapide.EditorTools
             {
                 passengerSat |= e.Passenger.IsSeated;
                 greatestContactError=Mathf.Max(greatestContactError,e.Passenger.Rig.MaxContactError);
+                float passengerDepth=e.Clearance.Measure(e.Passenger.Rig.Animator);
+                if(passengerDepth>peakPenetration) {peakPenetration=passengerDepth; worstPenetration=e.Clearance.WorstContact+" at "+t.ToString("F2");}
+                File.AppendAllText(Folder+"/poses.jsonl",JsonUtility.ToJson(new VehicleReviewBridge.PoseSample {
+                    name=t.ToString("F3"),pose=e.Passenger.Rig.CurrentPose,penetration=passengerDepth,passenger=true,rearDoorAngle=e.Passenger.DoorAngle,
+                    contact=e.Clearance.WorstContact,contactError=e.Passenger.Rig.MaxContactError})+"\n");
                 if(t>=nextCapture)
                 {
                     nextCapture=t+.5f;
@@ -118,6 +138,7 @@ namespace CarRapide.EditorTools
                     Check(passengerSat,"Passenger reaches the seat before alighting");
                     Check(!e.Engine.PassengerBusy,"Passenger sequence releases ignition interlock");
                     Check(greatestContactError<.05f,"Passenger contacts remain within 5 cm (max="+greatestContactError.ToString("F3")+")");
+                    Check(peakPenetration<.015f,"Passenger body clearance against original meshes (max="+peakPenetration.ToString("F4")+", "+worstPenetration+")");
                     End();
                 }
                 return;
@@ -150,17 +171,24 @@ namespace CarRapide.EditorTools
                 if(t>27 && t<28) braked |= e.GetComponent<VehicleController>().SpeedKmh<.5f;
             }
             greatestContactError=Mathf.Max(greatestContactError,e.Driver.Rig.MaxContactError);
+            float penetration=e.Clearance.Measure(e.Driver.Rig.Animator);
+            if(t<17) File.AppendAllText(Folder+"/poses.jsonl",JsonUtility.ToJson(new VehicleReviewBridge.PoseSample {
+                name=t.ToString("F3")+" "+e.Driver.CurrentAction,pose=e.Driver.Rig.CurrentPose,doorAngle=e.Door.OpenAngle,
+                penetration=penetration,contact=e.Clearance.WorstContact,contactError=e.Driver.Rig.MaxContactError,errors=e.Driver.Rig.ContactErrors})+"\n");
+            if(penetration>peakPenetration) {peakPenetration=penetration; worstPenetration=e.Clearance.WorstContact+" at "+t.ToString("F2");}
             if(t>=nextCapture)
             {
                 nextCapture=t+.5f;
                 Capture(Folder+"/frame-"+(frame++).ToString("D3")+".png");
                 var rig=e.Driver.Rig;
+                File.AppendAllText(Folder+"/checks.txt",$"clearance={penetration:F4} {e.Clearance.WorstContact}\n");
                 var input=typeof(VehicleController).GetField("moveInput",System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance).GetValue(e.GetComponent<VehicleController>());
                 File.AppendAllText(Folder+"/checks.txt","input="+input+" errors="+rig.ContactErrors.ToString("F3")+"\n");
                 File.AppendAllText(Folder+"/checks.txt",System.FormattableString.Invariant($"t={t:F2} action={e.Driver.CurrentAction} seated={e.Driver.IsSeated} running={e.Engine.IsRunning} speed={e.GetComponent<VehicleController>().SpeedKmh:F2} contacts={rig.MaxContactError:F3} keyW={keyboard.wKey.isPressed} current={Keyboard.current.deviceId}\n"));
             }
             if(t>=30)
             {
+                Check(peakPenetration<.015f,"Body clearance against original meshes (max="+peakPenetration.ToString("F4")+", "+worstPenetration+")");
                 if(recordedAudio!=null) Check(recordedAudio.ClippedSamples==0,"Recorded audio remains below digital clipping");
                 Check(observedIgnition && ignitionStayedLocked,"Held controls remain locked throughout engine startup");
                 Check(e.Engine.IsRunning && e.Engine.Audio.LoopPlaying,"Engine audio sources remain active during driving");
@@ -179,6 +207,11 @@ namespace CarRapide.EditorTools
             keyboard.MakeCurrent(); InputState.Change(keyboard,requestedInput);
         }
         static void Check(bool pass,string message) => File.AppendAllText(Folder+"/checks.txt",(pass?"PASS ":"FAIL ")+message+"\n");
+        static void EnableBackgroundReview()
+        {
+            previousBackground=Application.runInBackground;
+            Application.runInBackground=true; backgroundChanged=true;
+        }
         static void End()
         {
             active=false; EditorApplication.update-=Tick;
@@ -188,6 +221,7 @@ namespace CarRapide.EditorTools
                 video?.Dispose(); video=null;
             }
             if(captureRateChanged) { Time.captureFramerate=previousCaptureRate; captureRateChanged=false; }
+            if(backgroundChanged) { Application.runInBackground=previousBackground; backgroundChanged=false; }
             VehicleMotionBaker.End();
             InputSystem.onBeforeUpdate-=InjectInput;
             if(keyboard!=null && keyboard.added) InputSystem.RemoveDevice(keyboard);

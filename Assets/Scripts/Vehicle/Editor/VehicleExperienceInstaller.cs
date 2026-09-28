@@ -20,6 +20,8 @@ namespace CarRapide.EditorTools
             var vehicle=Object.FindAnyObjectByType<VehicleController>();
             Undo.RegisterFullObjectHierarchyUndo(vehicle.gameObject,"Install driver experience");
             var model=vehicle.transform.Find("Car rapide");
+            var vehicleImporter=(ModelImporter)AssetImporter.GetAtPath("Assets/Art/Vehicles/CarRapide/Car rapide.fbx");
+            if(!vehicleImporter.isReadable) {vehicleImporter.isReadable=true; vehicleImporter.SaveAndReimport();}
             model.localScale=Vector3.one*2.2f;
             PrepareGlass(model);
             vehicle.transform.position=new Vector3(0,.03634f,0);
@@ -40,16 +42,16 @@ namespace CarRapide.EditorTools
             }
             points.driverOutside=Anchor("DriverOutsidePoint",new Vector3(-1.88f,-.03634f,1.14f));
             points.doorHandle=Anchor("DoorHandlePoint",new Vector3(-1.068f,1.16f,1.30f));
-            points.doorPull=Anchor("DoorInnerPullPoint",new Vector3(-1.022f,1.48f,1.91f));
+            points.doorPull=Anchor("DoorInnerPullPoint",new Vector3(-.97f,1.48f,1.91f));
             points.driverDoor=Anchor("DriverDoorPoint",new Vector3(-1.12f,.358f,1.75f));
             points.driverStep=Anchor("DriverStepPoint",new Vector3(-1.015f,.336f,1.95f));
             points.driverCabin=Anchor("DriverCabinPoint",new Vector3(-.69f,.358f,1.73f));
-            points.driverSeat=Anchor("DriverSeatPoint",new Vector3(-.61f,1.14f,1.39f));
+            points.driverSeat=Anchor("DriverSeatPoint",new Vector3(-.61f,1.03f,1.43f));
             points.wheelLeftHand=Anchor("SteeringWheelLeftHandPoint",new Vector3(-.85f,1.34f,1.72f));
             points.wheelRightHand=Anchor("SteeringWheelRightHandPoint",new Vector3(-.38f,1.34f,1.72f));
             points.driverLeftFoot=Anchor("DriverLeftFootPoint",new Vector3(-.77f,.43f,1.995f));
             points.driverRightFoot=Anchor("DriverRightFootPoint",new Vector3(-.49f,.44f,2.015f));
-            points.ignition=Anchor("IgnitionPoint",new Vector3(-.40f,1.22f,1.80f));
+            points.ignition=Anchor("IgnitionPoint",new Vector3(-.34f,1.22f,1.8f));
             points.receiverLeftFoot=Anchor("ReceiverFootPoint",new Vector3(-.76f,.318f,-2.51f));
             points.receiverRightFoot=Anchor("ReceiverRightFootPoint",new Vector3(-.50f,.318f,-2.53f));
             points.receiverHandGrip=Anchor("ReceiverHandGripPoint",new Vector3(-.63f,1.62f,-2.20f));
@@ -61,6 +63,7 @@ namespace CarRapide.EditorTools
             Transform Find(string name) => model.GetComponentsInChildren<Transform>(true).First(t=>t.name==name);
             points.driverDoorMesh=Find("Porte_avant_gauche"); points.driverMirror=Find("Retroviseur gauche"); points.rearDoorMesh=Find("Porte_arriere");
             points.rearWindowMesh=Find("Fenetre_arriere");
+            CalibrateCabin(points);
             if(!vehicle.GetComponent<VehicleDriverExperience>()) vehicle.gameObject.AddComponent<VehicleDriverExperience>();
             var camera=Camera.main; camera.fieldOfView=48; camera.nearClipPlane=.05f;
             camera.transform.position=new Vector3(-4.7f,2.48634f,4.9f); camera.transform.LookAt(new Vector3(-.45f,1.08634f,.95f));
@@ -69,6 +72,25 @@ namespace CarRapide.EditorTools
             EditorSceneManager.SaveScene(vehicle.gameObject.scene);
             AssetDatabase.SaveAssets();
             Debug.Log("Calibrated driver experience installed. E: board, R: ignition, P: passenger demo.");
+        }
+
+        public static void CalibrateCabin(VehicleInteractionPoints points)
+        {
+            // The imported column sits in the knee corridor. Retain the original mesh and
+            // shift the assembly 10 cm forward / 5 cm up, still behind the windscreen.
+            var wheel=points.transform.Find("Car rapide").GetComponentsInChildren<Transform>(true).First(t=>t.name=="Volant");
+            var source=PrefabUtility.GetCorrespondingObjectFromSource(wheel);
+            wheel.localPosition=(source ? source.localPosition : Vector3.zero)
+                +wheel.parent.InverseTransformVector(points.transform.TransformVector(new Vector3(0,.05f,.10f)));
+            PrefabUtility.RecordPrefabInstancePropertyModifications(wheel);
+            points.driverSeat.localPosition=new Vector3(-.61f,1.03f,1.43f);
+            points.driverLeftFoot.localPosition=new Vector3(-.77f,.43f,1.95f);
+            points.wheelLeftHand.localPosition=new Vector3(-.85f,1.39f,1.82f);
+            points.wheelRightHand.localPosition=new Vector3(-.38f,1.39f,1.82f);
+            points.doorPull.localPosition=new Vector3(-.97f,1.48f,1.91f);
+            points.ignition.localPosition=new Vector3(-.34f,1.27f,1.84f);
+            points.passengerOutside.localPosition=new Vector3(-.7f,-.03634f,-4.04f);
+            points.passengerDoorGrip.localPosition=new Vector3(-.35f,1.19f,-2.31f);
         }
 
         static void PrepareGlass(Transform model)

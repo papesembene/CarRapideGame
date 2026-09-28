@@ -1,4 +1,5 @@
 using UnityEngine;
+using System.Collections.Generic;
 
 namespace CarRapide.Vehicle
 {
@@ -6,10 +7,13 @@ namespace CarRapide.Vehicle
     [DefaultExecutionOrder(100)]
     public sealed class CharacterContactRig : MonoBehaviour
     {
+        [System.Serializable]
         public struct Pose
         {
             public Vector3 pelvis, leftFoot, rightFoot, leftHand, rightHand;
             public float yaw, leftFootYaw, rightFootYaw, lean, roll, leftHandWeight, rightHandWeight, leftGrip, rightGrip;
+            public float leftElbowBack, rightElbowBack;
+            public float leftKneeYawOffset, rightKneeYawOffset;
             public static Pose Blend(Pose a, Pose b, float t)
             {
                 return new Pose {
@@ -24,7 +28,9 @@ namespace CarRapide.Vehicle
                     lean = Mathf.Lerp(a.lean,b.lean,t), roll = Mathf.Lerp(a.roll,b.roll,t),
                     leftHandWeight = Mathf.Lerp(a.leftHandWeight,b.leftHandWeight,t),
                     rightHandWeight = Mathf.Lerp(a.rightHandWeight,b.rightHandWeight,t)
-                    ,leftGrip=Mathf.Lerp(a.leftGrip,b.leftGrip,t),rightGrip=Mathf.Lerp(a.rightGrip,b.rightGrip,t)
+                    ,leftGrip=Mathf.Lerp(a.leftGrip,b.leftGrip,t),rightGrip=Mathf.Lerp(a.rightGrip,b.rightGrip,t),
+                    leftElbowBack=Mathf.Lerp(a.leftElbowBack,b.leftElbowBack,t),rightElbowBack=Mathf.Lerp(a.rightElbowBack,b.rightElbowBack,t),
+                    leftKneeYawOffset=Mathf.Lerp(a.leftKneeYawOffset,b.leftKneeYawOffset,t),rightKneeYawOffset=Mathf.Lerp(a.rightKneeYawOffset,b.rightKneeYawOffset,t)
                 };
             }
         }
@@ -38,6 +44,8 @@ namespace CarRapide.Vehicle
         Animator animator;
         Transform frame, hips, spine;
         Quaternion hipsRest, spineRest;
+        readonly List<Transform> bodyBones = new List<Transform>();
+        readonly List<Quaternion> bodyRotations = new List<Quaternion>();
         Limb leftLeg, rightLeg, leftArm, rightArm;
         Pose pose;
         bool ready;
@@ -57,6 +65,16 @@ namespace CarRapide.Vehicle
             spine = animator.GetBoneTransform(HumanBodyBones.Spine);
             hipsRest = Quaternion.Inverse(frame.rotation) * hips.rotation;
             spineRest = spine.localRotation;
+            // Baked contact clips must not add yesterday's chest/shoulder pose to today's IK.
+            // Fingers retain their animation, but the solved body always starts from the bind pose.
+            for (int i = 0; i <= (int)HumanBodyBones.RightToes; i++)
+            {
+                var bone = animator.GetBoneTransform((HumanBodyBones)i);
+                if (!bone) continue;
+                bodyBones.Add(bone); bodyRotations.Add(bone.localRotation);
+            }
+            var upperChest = animator.GetBoneTransform(HumanBodyBones.UpperChest);
+            if (upperChest) { bodyBones.Add(upperChest); bodyRotations.Add(upperChest.localRotation); }
             leftLeg = MakeLimb(HumanBodyBones.LeftUpperLeg, HumanBodyBones.LeftLowerLeg, HumanBodyBones.LeftFoot);
             rightLeg = MakeLimb(HumanBodyBones.RightUpperLeg, HumanBodyBones.RightLowerLeg, HumanBodyBones.RightFoot);
             leftArm = MakeLimb(HumanBodyBones.LeftUpperArm, HumanBodyBones.LeftLowerArm, HumanBodyBones.LeftHand);
@@ -78,6 +96,7 @@ namespace CarRapide.Vehicle
         void LateUpdate() { if (ready) ApplyPose(); }
         public void ApplyPose()
         {
+            for (int i = 0; i < bodyBones.Count; i++) bodyBones[i].localRotation = bodyRotations[i];
             Quaternion facing = frame.rotation * Quaternion.Euler(0,pose.yaw,0);
             hips.rotation = facing * Quaternion.Euler(pose.lean * 0.3f,0,pose.roll * 0.3f) * hipsRest;
             hips.position = frame.TransformPoint(pose.pelvis);
@@ -86,13 +105,13 @@ namespace CarRapide.Vehicle
             Vector3 forward = facing * Vector3.forward;
             Vector3 right = facing * Vector3.right;
             MaxContactError = 0;
-            float e0=Solve(leftLeg, frame.TransformPoint(pose.leftFoot + Vector3.up * FootHeight), hips.position + forward - right * 0.16f,
+            float e0=Solve(leftLeg, frame.TransformPoint(pose.leftFoot + Vector3.up * FootHeight), hips.position + Quaternion.AngleAxis(pose.leftKneeYawOffset,frame.up)*forward - right * 0.16f,
                 frame.rotation * Quaternion.Euler(0,pose.leftFootYaw,0) * leftLeg.tipRest, 1);
-            float e1=Solve(rightLeg, frame.TransformPoint(pose.rightFoot + Vector3.up * FootHeight), hips.position + forward + right * 0.16f,
+            float e1=Solve(rightLeg, frame.TransformPoint(pose.rightFoot + Vector3.up * FootHeight), hips.position + Quaternion.AngleAxis(pose.rightKneeYawOffset,frame.up)*forward + right * 0.16f,
                 frame.rotation * Quaternion.Euler(0,pose.rightFootYaw,0) * rightLeg.tipRest, 1);
-            float e2=Solve(leftArm, frame.TransformPoint(pose.leftHand), hips.position - right * 0.6f + forward * 0.12f,
+            float e2=Solve(leftArm, frame.TransformPoint(pose.leftHand), hips.position + Vector3.Lerp(-right*.6f+forward*.12f,-right*.3f-forward*.5f,pose.leftElbowBack),
                 facing * Quaternion.Slerp(Quaternion.Euler(0,0,75),Quaternion.Euler(25,90,0),pose.leftGrip) * leftArm.tipRest, pose.leftHandWeight);
-            float e3=Solve(rightArm, frame.TransformPoint(pose.rightHand), hips.position + right * 0.6f + forward * 0.12f,
+            float e3=Solve(rightArm, frame.TransformPoint(pose.rightHand), hips.position + Vector3.Lerp(right*.6f+forward*.12f,right*.3f-forward*.5f,pose.rightElbowBack),
                 facing * Quaternion.Slerp(Quaternion.Euler(0,0,-75),Quaternion.Euler(25,-90,0),pose.rightGrip) * rightArm.tipRest, pose.rightHandWeight);
             ContactErrors=new Vector4(e0,e1,e2,e3);
         }

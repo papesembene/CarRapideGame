@@ -12,6 +12,7 @@ namespace CarRapide.Vehicle
         public VehicleDoorController Door { get; private set; }
         public VehicleCameraController CameraDirector { get; private set; }
         public bool Ready { get; private set; }
+        public VehicleCharacterClearance Clearance { get; private set; }
         GUIStyle titleStyle, labelStyle, keyStyle;
 
         void Awake() { GetComponent<VehicleController>().CanDrive = false; }
@@ -20,6 +21,7 @@ namespace CarRapide.Vehicle
             var points = GetComponent<VehicleInteractionPoints>();
             if (!points.driverDoorMesh || !points.driverSeat || !points.receiverLeftFoot)
             { Debug.LogError("Car Rapide: install the calibrated experience using the Vehicle menu.",this); return; }
+            Clearance=gameObject.AddComponent<VehicleCharacterClearance>(); Clearance.Initialize();
             Door = gameObject.AddComponent<VehicleDoorController>(); Door.Initialize(points);
             CameraDirector = gameObject.AddComponent<VehicleCameraController>(); CameraDirector.Initialize(transform,points);
             var driver = CreateCharacter("Chauffeur", "Black_M_1_Casual", 1.72f);

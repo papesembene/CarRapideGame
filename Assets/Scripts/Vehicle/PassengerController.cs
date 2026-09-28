@@ -16,8 +16,10 @@ namespace CarRapide.Vehicle
         Transform walkingFrame;
         Quaternion rearClosed;
         Vector3 rearAxis;
+        Vector3 innerGripLocal;
         public bool IsBusy { get; private set; }
         public bool IsSeated { get; private set; }
+        public float DoorAngle { get; private set; }
         public CharacterContactRig Rig => motion ? motion.Rig : null;
 
         public void Initialize(VehicleDriverExperience owner, VehicleInteractionPoints layout)
@@ -26,6 +28,7 @@ namespace CarRapide.Vehicle
             points = layout;
             rearClosed = points.rearDoorMesh.localRotation;
             rearAxis = points.rearDoorMesh.parent.InverseTransformDirection(layout.transform.up);
+            innerGripLocal=points.rearDoorMesh.InverseTransformPoint(layout.transform.TransformPoint(new Vector3(.28f,1.19f,-2.25f)));
             points.passengerDoorGrip.SetParent(points.rearDoorMesh, true);
             points.rearWindowMesh.SetParent(points.rearDoorMesh, true);
             var character = owner.CreateCharacter("Passager", "Black_M_2_Casual", 1.70f);
@@ -51,10 +54,11 @@ namespace CarRapide.Vehicle
         }
 
         Vector3 DoorGrip => walkingFrame.InverseTransformPoint(points.passengerDoorGrip.position);
+        Vector3 InnerGrip => walkingFrame.InverseTransformPoint(points.rearDoorMesh.TransformPoint(innerGripLocal));
         void Relax(ref Pose p, bool holdDoor = false)
         {
             DriverController.RelaxHands(ref p);
-            if (holdDoor) p.rightHand = DoorGrip;
+            if (holdDoor) p.rightHand = InnerGrip;
         }
 
         IEnumerator Demo()
@@ -62,13 +66,24 @@ namespace CarRapide.Vehicle
             experience.CameraDirector.PassengerView();
             motion.Play("Client_Walk");
             if (Mathf.Abs(Mathf.DeltaAngle(Rig.CurrentPose.yaw, 0)) > 1) yield return Turn(0);
-            for (int i = 0; i < 6; i++) yield return WalkStep(i % 2 == 0, .34f);
+            yield return Walk(.34f);
 
             var p = Rig.CurrentPose;
-            p.lean = 20;
-            Relax(ref p, true);
+            p.lean = 27;
+            Relax(ref p); p.rightHand=DoorGrip;
             yield return motion.Transition(p, .75f);
-            yield return RearDoor(0, -105);
+            yield return OpenRearDoor();
+            // Approach the aisle only after the door has cleared the waiting position.
+            p=Rig.CurrentPose; p.lean=0; Relax(ref p);
+            yield return motion.Transition(p,.4f);
+            var center=p;
+            center.pelvis.x+=.7f; center.leftFoot.x+=.7f; center.rightFoot.x+=.7f; center.lean=20;
+            center.pelvis.z+=.15f; center.leftFoot.z+=.15f; center.rightFoot.z+=.15f;
+            for(float t=0;t<1.8f;t+=Time.deltaTime)
+            { Rig.SetPose(SideStepPose(center,1-t/1.8f)); yield return null; }
+            Relax(ref center); Rig.SetPose(center);
+            p=center; p.rightElbowBack=.5f; Relax(ref p,true);
+            yield return motion.Transition(p,.6f);
             var ground = Rig.CurrentPose;
             var route = new List<Pose> { ground };
 
@@ -137,11 +152,11 @@ namespace CarRapide.Vehicle
                 bool right = (target.rightFoot - current.rightFoot).sqrMagnitude > .001f;
                 yield return motion.Transition(target, .9f, left ? .12f : 0, right ? .12f : 0);
             }
-            yield return RearDoor(-105, 0);
+            yield return CloseRearDoor();
             p = Rig.CurrentPose; p.lean = 0; Relax(ref p);
             yield return motion.Transition(p, .6f);
             yield return Turn(180);
-            for (int i = 0; i < 6; i++) yield return WalkStep(i % 2 == 0, -.34f);
+            yield return Walk(-.34f);
             motion.Play("Client_Idle");
             IsBusy = false;
             experience.Engine.PassengerBusy = false;
@@ -149,13 +164,19 @@ namespace CarRapide.Vehicle
             else experience.CameraDirector.ExteriorView();
         }
 
-        IEnumerator WalkStep(bool left, float distance)
+        IEnumerator Walk(float distance)
         {
             var p = Rig.CurrentPose;
-            p.pelvis.z += distance * .5f;
-            if (left) p.leftFoot.z += distance; else p.rightFoot.z += distance;
-            Relax(ref p);
-            yield return motion.Transition(p, .60f, left ? .08f : 0, left ? 0 : .08f);
+            var steps=new DriverAnimationController.Step[6];
+            for(int i=0;i<steps.Length;i++)
+            {
+                bool left=i%2==0;
+                p.pelvis.z+=distance*.5f;
+                if(left) p.leftFoot.z+=distance; else p.rightFoot.z+=distance;
+                Relax(ref p);
+                steps[i]=new DriverAnimationController.Step(p,.6f,left?.08f:0,left?0:.08f);
+            }
+            yield return motion.Sequence(steps);
         }
 
         IEnumerator Turn(float yaw)
@@ -174,17 +195,56 @@ namespace CarRapide.Vehicle
             yield return motion.Transition(p, .7f, 0, .05f);
         }
 
-        IEnumerator RearDoor(float from, float to)
+        void SetRearDoor(float angle)
         {
-            var p = Rig.CurrentPose;
-            for (float t = 0; t < 1.25f; t += Time.deltaTime)
+            DoorAngle=angle;
+            points.rearDoorMesh.localRotation=Quaternion.AngleAxis(angle,rearAxis)*rearClosed;
+        }
+
+        Pose SideStepPose(Pose center,float u)
+        {
+            u=Mathf.Clamp01(u);
+            var p=center;
+            float travel=DriverAnimationController.Smooth(u/.45f)+DriverAnimationController.Smooth((u-.45f)/.45f);
+            p.pelvis+=new Vector3(-.35f,0,-.075f)*travel;
+            p.pelvis.y-=.12f*Mathf.Sin(Mathf.PI*Mathf.Min(1,u/.9f));
+            p.lean=20*(1-DriverAnimationController.Smooth(u/.4f));
+            var offset=new Vector3(-.7f,0,-.15f);
+            p.leftFoot=DriverAnimationController.Swing(center.leftFoot,center.leftFoot+offset,Mathf.Clamp01(u/.45f),.07f);
+            p.rightFoot=DriverAnimationController.Swing(center.rightFoot,center.rightFoot+offset,Mathf.Clamp01((u-.45f)/.45f),.07f);
+            Relax(ref p); return p;
+        }
+
+        IEnumerator OpenRearDoor()
+        {
+            var start=Rig.CurrentPose;
+            for(float t=0;t<1.4f;t+=Time.deltaTime)
             {
-                points.rearDoorMesh.localRotation = Quaternion.AngleAxis(Mathf.Lerp(from, to, Mathf.SmoothStep(0, 1, t / 1.25f)), rearAxis) * rearClosed;
-                Relax(ref p, true); Rig.SetPose(p);
+                float u=DriverAnimationController.Smooth(t/1.4f);
+                SetRearDoor(-105*u);
+                var p=start; Relax(ref p);
+                p.rightHand=Vector3.Lerp(DoorGrip,p.pelvis+new Vector3(.16f,.1f,-.03f),DriverAnimationController.Smooth((u-.12f)/.18f));
+                Rig.SetPose(p);
                 yield return null;
             }
-            points.rearDoorMesh.localRotation = Quaternion.AngleAxis(to, rearAxis) * rearClosed;
-            Relax(ref p, true); Rig.SetPose(p);
+            SetRearDoor(-105);
+        }
+
+        IEnumerator CloseRearDoor()
+        {
+            var center=Rig.CurrentPose;
+            // Push the inside face, release, then step clear before the door latches.
+            for(float t=0;t<2.1f;t+=Time.deltaTime)
+            {
+                float u=Mathf.Clamp01(t/2.1f);
+                SetRearDoor(-105+10*DriverAnimationController.Smooth(u/.2f)+95*DriverAnimationController.Smooth((u-.65f)/.35f));
+                var p=SideStepPose(center,u);
+                p.rightElbowBack=center.rightElbowBack*(1-DriverAnimationController.Smooth(u/.4f));
+                p.rightHand=Vector3.Lerp(InnerGrip,p.pelvis+new Vector3(.16f,.1f,-.03f),DriverAnimationController.Smooth(u/.25f));
+                Rig.SetPose(p); yield return null;
+            }
+            SetRearDoor(0);
+            var end=SideStepPose(center,1); end.rightElbowBack=0; Rig.SetPose(end);
         }
 
         void OnDestroy() { if (walkingFrame) Destroy(walkingFrame.gameObject); }
