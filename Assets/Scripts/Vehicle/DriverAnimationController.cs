@@ -64,6 +64,12 @@ namespace CarRapide.Vehicle
                         +(-2*t*t*t+3*t*t)*b.pelvis+(t*t*t-t*t)*duration*outgoing;
                     p.leftFoot=Swing(a.leftFoot,b.leftFoot,t,steps[i].leftLift);
                     p.rightFoot=Swing(a.rightFoot,b.rightFoot,t,steps[i].rightLift);
+                    float stepWave=Mathf.Sin(Mathf.PI*t);
+                    p.pelvis.y+=.009f*stepWave;
+                    var facing=Quaternion.Euler(0,p.yaw,0);
+                    float swing=(steps[i].leftLift>0?1:-1)*.065f*stepWave;
+                    p.leftHand+=facing*new Vector3(0,0,-swing);
+                    p.rightHand+=facing*new Vector3(0,0,swing);
                     Rig.SetPose(p); yield return null;
                 }
                 Rig.SetPose(b);
@@ -77,6 +83,35 @@ namespace CarRapide.Vehicle
                 float Axis(float x,float y) => x*y<=0?0:Mathf.Sign(x)*Mathf.Min(Mathf.Abs(x),Mathf.Abs(y));
                 return new Vector3(Axis(v0.x,v1.x),Axis(v0.y,v1.y),Axis(v0.z,v1.z));
             }
+        }
+        public IEnumerator WalkTo(Vector3 target,float speed=.65f)
+        {
+            var p=Rig.CurrentPose;
+            var feet=(p.leftFoot+p.rightFoot)*.5f;
+            Vector3 delta=target-feet;delta.y=0;
+            if(delta.magnitude<.02f) yield break;
+            float yaw=Mathf.Atan2(delta.x,delta.z)*Mathf.Rad2Deg;
+            var direction=delta.normalized;
+            int count=Mathf.Max(2,Mathf.CeilToInt(delta.magnitude/.19f)); if(count%2!=0)count++;
+            float stride=delta.magnitude/count;
+            var steps=new Step[count];
+            var facing=Quaternion.Euler(0,yaw,0);
+            for(int i=0;i<count;i++)
+            {
+                bool left=i%2==0;
+                p.yaw=p.leftFootYaw=p.rightFootYaw=yaw;
+                // Leave room for the supporting leg's diagonal reach during the stride.
+                p.pelvis=feet+direction*stride*(i+1)+Vector3.up*(Rig.StandingHeight-.03f);
+                var landing=feet+direction*Mathf.Min(delta.magnitude,stride*(i+2));
+                if(left)p.leftFoot=landing+facing*Vector3.left*.10f;else p.rightFoot=landing+facing*Vector3.right*.10f;
+                p.lean=2; DriverController.RelaxHands(ref p);
+                steps[i]=new Step(p,stride/speed,left?.045f:0,left?0:.045f);
+            }
+            yield return Sequence(steps);
+            p.pelvis=target+Vector3.up*(Rig.StandingHeight-.004f);p.lean=0;
+            p.leftFoot=target+facing*Vector3.left*.1f;p.rightFoot=target+facing*Vector3.right*.1f;
+            DriverController.RelaxHands(ref p);
+            yield return Transition(p,.25f,.025f,.025f);
         }
         public static float Smooth(float t) { t=Mathf.Clamp01(t); return t*t*t*(t*(6*t-15)+10); }
         public static Vector3 Swing(Vector3 from, Vector3 to, float t, float clearance)

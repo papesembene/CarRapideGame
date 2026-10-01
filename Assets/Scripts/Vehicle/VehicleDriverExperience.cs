@@ -27,6 +27,7 @@ namespace CarRapide.Vehicle
             var driver = CreateCharacter("Chauffeur", "Black_M_1_Casual", 1.72f);
             var receiver = CreateCharacter("ApprentiReceveur", "Black_M_2_Casual", 1.70f);
             if (!driver || !receiver) return;
+            WorkwearAppearance.Apply(driver,false); WorkwearAppearance.Apply(receiver,true);
             Driver = driver.AddComponent<DriverController>(); Driver.Initialize(points,Door,CameraDirector);
             receiver.AddComponent<ReceiverController>().Initialize(points,GetComponent<Rigidbody>());
             Engine = gameObject.AddComponent<VehicleEngineController>(); Engine.Initialize(GetComponent<VehicleController>(),Driver,Door,CameraDirector);
@@ -65,7 +66,8 @@ namespace CarRapide.Vehicle
             if (!Ready || Keyboard.current == null) return;
             if (Keyboard.current.eKey.wasPressedThisFrame) Driver.RequestBoard();
             if (Keyboard.current.rKey.wasPressedThisFrame) Engine.RequestStart();
-            if (Keyboard.current.pKey.wasPressedThisFrame) Passenger.RequestDemo();
+            if (Keyboard.current.pKey.wasPressedThisFrame) Passenger.RequestBoard();
+            if (Keyboard.current.oKey.wasPressedThisFrame) Passenger.RequestAlight();
         }
 
         void OnGUI()
@@ -79,17 +81,19 @@ namespace CarRapide.Vehicle
             titleStyle ??= new GUIStyle(GUI.skin.label) {fontSize=18,fontStyle=FontStyle.Bold,normal={textColor=new Color(1,.83f,.35f)}};
             labelStyle ??= new GUIStyle(GUI.skin.label) {fontSize=14,normal={textColor=Color.white}};
             keyStyle ??= new GUIStyle(GUI.skin.label) {fontSize=12,normal={textColor=new Color(.74f,.8f,.82f)}};
-            var old=GUI.color; GUI.color=new Color(.04f,.075f,.085f,.91f);
+            var old=GUI.color; var oldContent=GUI.contentColor; GUI.color=new Color(.04f,.075f,.085f,.91f);
             GUI.DrawTexture(new Rect(24,height-114,Mathf.Min(680,width-48),90),Texture2D.whiteTexture);
-            GUI.color=old;
+            GUI.color=Color.white; GUI.contentColor=Color.white;
             GUI.Label(new Rect(42,height-108,600,28),"CAR RAPIDE  /  PREMIER DÉPART",titleStyle);
-            string instruction=Engine.IsRunning ? "Moteur en marche · " + GetComponent<VehicleController>().SpeedKmh.ToString("0")+" km/h"
-                : Engine.IsStarting ? "Démarrage du moteur…" : Passenger.IsBusy ? "Montée et descente du passager…" : Driver.IsSeated ? "R  ·  Démarrer le moteur" : Driver.IsBoarding ? Driver.CurrentAction : "E  ·  Prendre place au volant";
+            string instruction=Passenger.IsBusy || Passenger.PhysicsBody.IsFallen ? Passenger.Status : Passenger.HasFeedback ? Passenger.Feedback : Engine.IsRunning ? "Moteur en marche · " + GetComponent<VehicleController>().SpeedKmh.ToString("0")+" km/h"
+                : Engine.IsStarting ? "Démarrage du moteur…" : Passenger.IsBusy ? Passenger.Status : Driver.IsSeated ? "R  ·  Démarrer le moteur" : Driver.IsBoarding ? Driver.CurrentAction : "E  ·  Prendre place au volant";
             GUI.Label(new Rect(42,height-78,600,25),instruction,labelStyle);
             string hint = Engine.IsRunning ? "W / S  Accélérer · Freiner · Reculer     A / D  Direction     Espace  Frein à main"
-                : Engine.IsStarting ? "Mise en route · Conduite verrouillée" : "À l’arrêt · Moteur éteint                         P  Démonstration passager";
+                : Engine.IsStarting ? "Mise en route · Conduite verrouillée" : "P  Monter le passager     O  Descendre le passager · À l’arrêt";
+            if(Engine.IsRunning && GetComponent<VehicleController>().SpeedKmh<.5f) hint="P  Monter le passager     O  Descendre le passager     W / S  Conduire";
+            if(Passenger.IsSeated && !Passenger.IsBusy) hint="Passager à bord · O pour descendre à l’arrêt     W / S  Conduire";
             GUI.Label(new Rect(42,height-51,630,22),hint,keyStyle);
-            GUI.matrix = previousMatrix;
+            GUI.color=old; GUI.contentColor=oldContent; GUI.matrix = previousMatrix;
         }
     }
 }

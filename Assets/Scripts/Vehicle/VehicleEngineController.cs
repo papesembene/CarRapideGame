@@ -12,7 +12,12 @@ namespace CarRapide.Vehicle
         public VehicleAudioController Audio { get; private set; }
         public bool IsStarting { get; private set; }
         public bool IsRunning { get; private set; }
-        public bool PassengerBusy { get; set; }
+        bool passengerBusy;
+        public bool PassengerBusy
+        {
+            get => passengerBusy;
+            set {passengerBusy=value;if(vehicle)vehicle.CanDrive=IsRunning&&!value;}
+        }
         public void Initialize(VehicleController controller, DriverController chauffeur, VehicleDoorController realDoor, VehicleCameraController camera)
         {
             vehicle=controller; driver=chauffeur; door=realDoor; cameraDirector=camera;
@@ -29,6 +34,7 @@ namespace CarRapide.Vehicle
             yield return driver.TurnIgnition(Mathf.Max(1.5f,Audio.StartDuration), Audio.Crank);
             Audio.Run(); IsRunning=true; IsStarting=false; vehicle.CanDrive=true; cameraDirector.DrivingView();
         }
+        void Update() { if(vehicle) vehicle.CanDrive=IsRunning && !PassengerBusy; }
         void OnDisable() { if(vehicle)vehicle.CanDrive=false; }
     }
 }

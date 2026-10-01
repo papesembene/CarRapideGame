@@ -71,7 +71,8 @@ namespace CarRapide.EditorTools
             EditorSceneManager.MarkSceneDirty(vehicle.gameObject.scene);
             EditorSceneManager.SaveScene(vehicle.gameObject.scene);
             AssetDatabase.SaveAssets();
-            Debug.Log("Calibrated driver experience installed. E: board, R: ignition, P: passenger demo.");
+            VehicleAuthenticityInstaller.Install();
+            Debug.Log("Calibrated driver experience installed. E: driver, R: ignition, P: board passenger, O: alight.");
         }
 
         public static void CalibrateCabin(VehicleInteractionPoints points)

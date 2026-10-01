@@ -25,6 +25,8 @@ The bundled driver, receiver and demonstration passenger use the **VALID (Valida
 
 Adaptations in this project: Unity Humanoid import, separate URP materials, mesh-based height calibration, contact animation and vehicle roles. These are generic Black male avatars; the source does not identify them as Senegalese people. The Dakar context is supplied by the vehicle and gameplay.
 
+Additional adaptations: AI-assisted edits of the original clothing atlases with the built-in `image_gen` tool, a beige work polo/faded jeans for the driver, and navy clothing/red patterned shorts for the receiver. Runtime skinned sleeves and a cap complete the receiver's outfit. Reference descriptions, asset paths and generation prompts are recorded in [WORKWEAR_REFERENCES.md](WORKWEAR_REFERENCES.md). The user-supplied reference photographs are not distributed in this repository.
+
 ## Engine recordings
 
 - `Engine_Start.wav`: **Car engine Start Up 02**, looneybits, CC0 1.0. https://opengameart.org/content/car-engine-start-up-02

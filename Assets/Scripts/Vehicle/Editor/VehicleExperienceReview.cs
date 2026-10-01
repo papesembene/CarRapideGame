@@ -16,7 +16,7 @@ namespace CarRapide.EditorTools
         static bool active,boarded,started;
         static bool passengerReview;
         static bool braked, passengerSat, observedIgnition, ignitionStayedLocked;
-        static float peakSpeed, greatestContactError;
+        static float peakSpeed, peakHeadingChange, greatestContactError;
         static Quaternion initialRotation;
         static readonly float[] audioSamples=new float[512];
         static float peakAudio;
@@ -62,7 +62,7 @@ namespace CarRapide.EditorTools
             InputSystem.onBeforeUpdate+=InjectInput;
             origin=e.transform.position;
             initialRotation=e.transform.rotation;
-            peakSpeed=greatestContactError=peakAudio=0; braked=observedIgnition=false; ignitionStayedLocked=true;
+            peakSpeed=peakHeadingChange=greatestContactError=peakAudio=0; braked=observedIgnition=false; ignitionStayedLocked=true;
             peakPenetration=0; worstPenetration="none";
             start=Time.time; nextCapture=0; frame=0; active=true; boarded=started=false;
             EditorApplication.update-=Tick; EditorApplication.update+=Tick;
@@ -100,7 +100,7 @@ namespace CarRapide.EditorTools
             File.WriteAllText(Folder+"/checks.txt","Passenger review\n");
             File.WriteAllText(Folder+"/poses.jsonl","");
             start=Time.time; nextCapture=0; frame=0; active=true;
-            e.Passenger.RequestDemo();
+            e.Passenger.RequestBoard();
             EditorApplication.update-=Tick; EditorApplication.update+=Tick;
         }
         static void Tick()
@@ -120,6 +120,7 @@ namespace CarRapide.EditorTools
             }
             if(passengerReview)
             {
+                if(e.Passenger.IsSeated && !e.Passenger.IsBusy && t>24) e.Passenger.RequestAlight();
                 passengerSat |= e.Passenger.IsSeated;
                 greatestContactError=Mathf.Max(greatestContactError,e.Passenger.Rig.MaxContactError);
                 float passengerDepth=e.Clearance.Measure(e.Passenger.Rig.Animator);
@@ -133,7 +134,7 @@ namespace CarRapide.EditorTools
                     Capture(Folder+"/frame-"+(frame++).ToString("D3")+".png");
                     File.AppendAllText(Folder+"/checks.txt",$"t={t:F2} seated={e.Passenger.IsSeated} errors={e.Passenger.Rig.ContactErrors.ToString("F3")}\n");
                 }
-                if(t>1 && !e.Passenger.IsBusy)
+                if(t>24 && !e.Passenger.IsBusy && !e.Passenger.IsSeated)
                 {
                     Check(passengerSat,"Passenger reaches the seat before alighting");
                     Check(!e.Engine.PassengerBusy,"Passenger sequence releases ignition interlock");
@@ -163,6 +164,7 @@ namespace CarRapide.EditorTools
             {
                 requestedInput=t<25?new KeyboardState(Key.W,Key.D):t<28?new KeyboardState(Key.Space):new KeyboardState(Key.S);
                 peakSpeed=Mathf.Max(peakSpeed,e.GetComponent<VehicleController>().SpeedKmh);
+                peakHeadingChange=Mathf.Max(peakHeadingChange,Quaternion.Angle(initialRotation,e.transform.rotation));
                 if(recordedAudio==null)
                 {
                     AudioListener.GetOutputData(audioSamples,0);
@@ -194,7 +196,7 @@ namespace CarRapide.EditorTools
                 Check(e.Engine.IsRunning && e.Engine.Audio.LoopPlaying,"Engine audio sources remain active during driving");
                 Check(Vector3.Distance(origin,e.transform.position)>2,"Vehicle travels after ignition"); End();
                 Check(peakSpeed>30,"Accelerates beyond 30 km/h");
-                Check(Quaternion.Angle(initialRotation,e.transform.rotation)>10,"Steering changes heading");
+                Check(peakHeadingChange>10,"Steering changes heading (including a completed full turn)");
                 Check(braked,"Handbrake brings vehicle to rest");
                 Check(Vector3.Dot(e.GetComponent<Rigidbody>().linearVelocity,e.transform.forward)<-1,"S engages reverse after braking");
                 Check(peakAudio>.0001f,"Engine reaches the audio listener during driving (peak="+peakAudio.ToString("F4")+")");

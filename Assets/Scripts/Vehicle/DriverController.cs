@@ -25,15 +25,15 @@ namespace CarRapide.Vehicle
         public static Pose Standing(Vector3 feet, float yaw)
         {
             var q=Quaternion.Euler(0,yaw,0);
-            var p = new Pose {pelvis=feet+Vector3.up*.946f,yaw=yaw,leftFootYaw=yaw,rightFootYaw=yaw,
+            var p = new Pose {pelvis=feet+Vector3.up*.968f,yaw=yaw,leftFootYaw=yaw,rightFootYaw=yaw,
                 leftFoot=feet+q*new Vector3(-.12f,0,.035f),rightFoot=feet+q*new Vector3(.12f,0,-.035f),leftHandWeight=1,rightHandWeight=1};
             RelaxHands(ref p); return p;
         }
         public static void RelaxHands(ref Pose p)
         {
             var q=Quaternion.Euler(0,p.yaw,0);
-            p.leftHand=p.pelvis+q*new Vector3(-.25f,-.03f,.065f);
-            p.rightHand=p.pelvis+q*new Vector3(.25f,-.03f,.065f);
+            p.leftHand=p.pelvis+q*new Vector3(-.24f,-.015f,.06f);
+            p.rightHand=p.pelvis+q*new Vector3(.24f,-.015f,.06f);
         }
         public void RequestBoard()
         {
@@ -54,7 +54,7 @@ namespace CarRapide.Vehicle
                 new DriverAnimationController.Step(p,.52f,0,.065f));
             cameraDirector.DoorView();
             Phase("Driver_GrabHandle","Main sur la poignée…");
-            p.leftHand=points.ToLocal(points.doorHandle); p.lean=8;
+            p.leftHand=points.ToLocal(points.doorHandle); p.lean=14;
             yield return motion.Transition(p,.65f);
             Phase("Driver_OpenDoor","Ouverture de la porte…");
             var hold=p;
@@ -62,6 +62,7 @@ namespace CarRapide.Vehicle
             {
                 float u=DriverAnimationController.Smooth(t/1.15f); door.SetOpening(76*u);
                 hold=p;
+                hold.lean=Mathf.Lerp(p.lean,8,u);
                 float retreat=Mathf.Sin(Mathf.PI*u);
                 hold.pelvis=p.pelvis+new Vector3(-.10f,-.035f,.13f)*u+new Vector3(-.16f,-.03f,-.08f)*retreat;
                 RelaxHands(ref hold);
@@ -74,26 +75,27 @@ namespace CarRapide.Vehicle
             door.SetOpening(76); p=Rig.CurrentPose;
             // Move alongside the OPEN doorway first. The front wheel arch is not a step.
             p.rightFoot=new Vector3(-1.52f,-.03634f,1.86f);
-            p.pelvis=new Vector3(-1.56f,.86f,1.57f); p.yaw=65; p.rightFootYaw=35;
-            p.leftHand=new Vector3(-1.75f,1.01f,1.51f); p.leftGrip=0; p.leftElbowBack=0;
+            p.pelvis=new Vector3(-1.56f,.86f,1.57f); p.yaw=65; p.rightFootYaw=35; p.lean=8;
+            p.leftHand=LeftRest(p); p.leftGrip=0; p.leftElbowBack=0;
             RelaxRight(ref p);
             yield return motion.Transition(p,.65f,0,.10f);
             p.leftFoot=new Vector3(-1.53f,-.03634f,1.74f); p.leftFootYaw=35;
             p.pelvis=new Vector3(-1.52f,.86f,1.68f); p.yaw=35; p.leftKneeYawOffset=40;
             // The right wrist approaches the left rim from outside the cabin.
             p.rightHand=points.ToLocal(points.wheelLeftHand)+Vector3.back*.09f; p.rightGrip=1;
-            p.leftHand=new Vector3(-1.73f,1.01f,1.60f);
+            p.leftHand=LeftRest(p);
             yield return motion.Transition(p,.45f,.07f);
             cameraDirector.BoardingView();
             Phase("Driver_StepUp","Appui sur le marchepied…");
             p.leftFoot=points.ToLocal(points.driverStep); p.leftFootYaw=35;
             p.pelvis=new Vector3(-1.30f,.85f,1.63f); p.yaw=35; p.lean=0;
-            p.leftHand=new Vector3(-1.48f,.96f,1.57f);
+            p.leftHand=LeftRest(p);
             yield return motion.Transition(p,.75f,.16f);
             Phase("Driver_EnterCabin","Entrée sous le cadre de porte…");
             p.pelvis=new Vector3(-.99f,1.10f,1.54f); p.yaw=-10; p.lean=16; p.leftKneeYawOffset=0;
             p.rightFoot=new Vector3(-.80f,.336f,1.98f); p.rightFootYaw=0;
-            p.leftHand=new Vector3(-1.015f,1.45f,1.26f); p.leftGrip=.65f;
+            // Keep the supporting hand in front of the shoulder, never behind the back.
+            p.leftHand=new Vector3(-1.03f,1.26f,1.88f); p.leftGrip=.35f;
             yield return motion.Transition(p,.85f,0,.06f);
             Phase("Driver_TurnToSeat","Pivot au-dessus du siège…");
             p.leftFoot=points.ToLocal(points.driverLeftFoot); p.leftFootYaw=0;
@@ -131,6 +133,7 @@ namespace CarRapide.Vehicle
             yield return motion.Transition(p,.7f);
             motion.Play("Driver_DrivingIdle"); CurrentAction="Au volant"; IsSeated=true; IsBoarding=false;
         }
+        static Vector3 LeftRest(Pose p) => p.pelvis+Quaternion.Euler(0,p.yaw,0)*new Vector3(-.22f,-.015f,.03f);
         static void RelaxRight(ref Pose p)
         {
             p.rightHand=p.pelvis+Quaternion.Euler(0,p.yaw,0)*new Vector3(.24f,.12f,.15f);

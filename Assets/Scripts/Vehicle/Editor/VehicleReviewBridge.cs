@@ -30,6 +30,7 @@ public static class VehicleReviewBridge
         {
             if (command == "inspect") Inspect();
             else if(command=="refresh") AssetDatabase.Refresh();
+            else if(command=="authenticity") CarRapide.EditorTools.VehicleAuthenticityInstaller.Install();
             else if(command=="calibrate-clearance")
             {
                 if(EditorApplication.isPlaying) throw new InvalidOperationException("Stop Play Mode first.");
@@ -46,10 +47,12 @@ public static class VehicleReviewBridge
             else if (command == "capture") Capture();
             else if (command == "board") UnityEngine.Object.FindAnyObjectByType<VehicleDriverExperience>().Driver.RequestBoard();
             else if (command == "engine") UnityEngine.Object.FindAnyObjectByType<VehicleDriverExperience>().Engine.RequestStart();
-            else if (command == "passenger") UnityEngine.Object.FindAnyObjectByType<VehicleDriverExperience>().Passenger.RequestDemo();
+            else if (command == "passenger") UnityEngine.Object.FindAnyObjectByType<VehicleDriverExperience>().Passenger.RequestBoard();
+            else if (command == "alight") UnityEngine.Object.FindAnyObjectByType<VehicleDriverExperience>().Passenger.RequestAlight();
             else if (command == "review") CarRapide.EditorTools.VehicleExperienceReview.Begin();
             else if (command == "review-video") CarRapide.EditorTools.VehicleExperienceReview.BeginVideo();
             else if (command == "review-passenger") CarRapide.EditorTools.VehicleExperienceReview.BeginPassenger();
+            else if (command == "review-realism") CarRapide.EditorTools.VehicleRealismReview.Begin();
             else if (command == "snapshot") Snapshot();
             else if (command == "probe-poses") ProbePoses();
             else if (command == "bake") CarRapide.EditorTools.VehicleMotionBaker.Bake();
@@ -84,6 +87,7 @@ public static class VehicleReviewBridge
             for(int sub=0;sub<mesh.subMeshCount;sub++)
             {
                 var indices=mesh.GetTriangles(sub);
+                if(indices.Length==0) {s.AppendLine($" submesh={sub} empty");continue;}
                 var sb=new Bounds(points[indices[0]],Vector3.zero);
                 foreach(int index in indices)sb.Encapsulate(points[index]);
                 s.AppendLine($" submesh={sub} triangles={indices.Length/3} material={materials[sub].name} shader={materials[sub].shader.name} color={materials[sub].color} min={sb.min.ToString("F4")} max={sb.max.ToString("F4")}");

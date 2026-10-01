@@ -39,6 +39,7 @@ namespace CarRapide.Vehicle
         {
             public Transform upper, lower, tip;
             public Quaternion tipRest;
+            public Quaternion tipLocalRest;
             public float a, b;
         }
         Animator animator;
@@ -51,6 +52,7 @@ namespace CarRapide.Vehicle
         bool ready;
         public Animator Animator => animator;
         public float FootHeight { get; private set; }
+        public float StandingHeight { get; private set; }
         public float MaxContactError { get; private set; }
         public Vector4 ContactErrors { get; private set; }
         public Pose CurrentPose => pose;
@@ -80,6 +82,7 @@ namespace CarRapide.Vehicle
             leftArm = MakeLimb(HumanBodyBones.LeftUpperArm, HumanBodyBones.LeftLowerArm, HumanBodyBones.LeftHand);
             rightArm = MakeLimb(HumanBodyBones.RightUpperArm, HumanBodyBones.RightLowerArm, HumanBodyBones.RightHand);
             FootHeight = frame.InverseTransformPoint(leftLeg.tip.position).y - transform.localPosition.y;
+            StandingHeight=frame.InverseTransformPoint(hips.position).y-transform.localPosition.y;
             ready = true;
         }
 
@@ -89,6 +92,7 @@ namespace CarRapide.Vehicle
             l.a = Vector3.Distance(l.upper.position,l.lower.position);
             l.b = Vector3.Distance(l.lower.position,l.tip.position);
             l.tipRest = Quaternion.Inverse(frame.rotation) * l.tip.rotation;
+            l.tipLocalRest=l.tip.localRotation;
             return l;
         }
         public void SetPose(Pose value) { pose = value; }
@@ -109,10 +113,13 @@ namespace CarRapide.Vehicle
                 frame.rotation * Quaternion.Euler(0,pose.leftFootYaw,0) * leftLeg.tipRest, 1);
             float e1=Solve(rightLeg, frame.TransformPoint(pose.rightFoot + Vector3.up * FootHeight), hips.position + Quaternion.AngleAxis(pose.rightKneeYawOffset,frame.up)*forward + right * 0.16f,
                 frame.rotation * Quaternion.Euler(0,pose.rightFootYaw,0) * rightLeg.tipRest, 1);
-            float e2=Solve(leftArm, frame.TransformPoint(pose.leftHand), hips.position + Vector3.Lerp(-right*.6f+forward*.12f,-right*.3f-forward*.5f,pose.leftElbowBack),
+            float e2=Solve(leftArm, frame.TransformPoint(pose.leftHand), leftArm.upper.position-frame.up*.5f-right*.20f-forward*(.10f+.15f*pose.leftElbowBack),
                 facing * Quaternion.Slerp(Quaternion.Euler(0,0,75),Quaternion.Euler(25,90,0),pose.leftGrip) * leftArm.tipRest, pose.leftHandWeight);
-            float e3=Solve(rightArm, frame.TransformPoint(pose.rightHand), hips.position + Vector3.Lerp(right*.6f+forward*.12f,right*.3f-forward*.5f,pose.rightElbowBack),
+            float e3=Solve(rightArm, frame.TransformPoint(pose.rightHand), rightArm.upper.position-frame.up*.5f+right*.20f-forward*(.10f+.15f*pose.rightElbowBack),
                 facing * Quaternion.Slerp(Quaternion.Euler(0,0,-75),Quaternion.Euler(25,-90,0),pose.rightGrip) * rightArm.tipRest, pose.rightHandWeight);
+            // A relaxed wrist follows its forearm; a world-space wrist rotation makes it fold back.
+            leftArm.tip.localRotation=Quaternion.Slerp(leftArm.tipLocalRest,leftArm.tip.localRotation,pose.leftGrip);
+            rightArm.tip.localRotation=Quaternion.Slerp(rightArm.tipLocalRest,rightArm.tip.localRotation,pose.rightGrip);
             ContactErrors=new Vector4(e0,e1,e2,e3);
         }
 

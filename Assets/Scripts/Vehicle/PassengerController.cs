@@ -5,7 +5,7 @@ using Pose = CarRapide.Vehicle.CharacterContactRig.Pose;
 
 namespace CarRapide.Vehicle
 {
-    /// <summary>One continuous rear-door boarding, seating and alighting performance.</summary>
+    /// <summary>Player-controlled boarding and alighting with a persistent seated state.</summary>
     public sealed class PassengerController : MonoBehaviour
     {
         // Upper aisle surface measured from the original Carosserie triangles.
@@ -17,6 +17,13 @@ namespace CarRapide.Vehicle
         Quaternion rearClosed;
         Vector3 rearAxis;
         Vector3 innerGripLocal;
+        readonly List<Pose> route=new List<Pose>();
+        PedestrianPhysics pedestrian;
+        public PedestrianPhysics PhysicsBody => pedestrian;
+        public string Status { get; private set; } = "En attente";
+        public string Feedback { get; private set; }
+        float feedbackUntil;
+        public bool HasFeedback => Time.time<feedbackUntil;
         public bool IsBusy { get; private set; }
         public bool IsSeated { get; private set; }
         public float DoorAngle { get; private set; }
@@ -39,18 +46,46 @@ namespace CarRapide.Vehicle
             motion = character.AddComponent<DriverAnimationController>();
             motion.Initialize(walkingFrame);
             var p = DriverController.Standing(points.ToLocal(points.passengerOutside), 0);
-            p.pelvis.y -= .04f;
+            p.pelvis.y=points.ToLocal(points.passengerOutside).y+Rig.StandingHeight-.004f;
             DriverController.RelaxHands(ref p);
             Rig.SetPose(p);
             motion.Play("Client_Idle", 0);
+            Rig.ApplyPose();
+            pedestrian=character.AddComponent<PedestrianPhysics>(); pedestrian.Initialize(Rig,this,owner.GetComponent<Rigidbody>());
         }
 
-        public void RequestDemo()
+        public void RequestBoard()
         {
-            if (!motion || IsBusy || experience.Driver.IsBoarding || experience.Engine.IsStarting || experience.Engine.IsRunning) return;
-            IsBusy = true;
-            experience.Engine.PassengerBusy = true;
-            StartCoroutine(Demo());
+            if(!CanInteract() || IsSeated) return;
+            if(Vector3.Distance(Rig.Animator.GetBoneTransform(HumanBodyBones.Hips).position,points.passengerOutside.position)>4)
+            {Notify("Approcher le car du passager");return;}
+            // Rebase the coordinate frame without moving the waiting person.
+            var p=Rig.CurrentPose;
+            var old=walkingFrame.localToWorldMatrix;
+            float oldYaw=walkingFrame.eulerAngles.y;
+            walkingFrame.SetPositionAndRotation(points.transform.position,points.transform.rotation);
+            Vector3 Convert(Vector3 v)=>walkingFrame.InverseTransformPoint(old.MultiplyPoint3x4(v));
+            p.pelvis=Convert(p.pelvis);p.leftFoot=Convert(p.leftFoot);p.rightFoot=Convert(p.rightFoot);p.leftHand=Convert(p.leftHand);p.rightHand=Convert(p.rightHand);
+            float delta=oldYaw-walkingFrame.eulerAngles.y;p.yaw+=delta;p.leftFootYaw+=delta;p.rightFootYaw+=delta;Rig.SetPose(p);
+            IsBusy=true;experience.Engine.PassengerBusy=true;pedestrian.SetInteracting(true);Status="Le passager monte";
+            StartCoroutine(Board());
+        }
+        public void RequestAlight()
+        {
+            if(!CanInteract() || !IsSeated) return;
+            IsBusy=true;experience.Engine.PassengerBusy=true;Status="Le passager descend";
+            StartCoroutine(Alight());
+        }
+        bool CanInteract()
+        {
+            if(!motion || IsBusy || pedestrian.IsFallen || experience.Driver.IsBoarding || experience.Engine.IsStarting) return false;
+            if(experience.GetComponent<VehicleController>().SpeedKmh>.5f) {Notify("Arrêter le car pour le passager");return false;}
+            return true;
+        }
+        void Notify(string message) {Feedback=message;feedbackUntil=Time.time+3;}
+        public void OnVehicleImpact()
+        {
+            StopAllCoroutines();IsBusy=false;IsSeated=false;experience.Engine.PassengerBusy=false;Status="Passager renversé";
         }
 
         Vector3 DoorGrip => walkingFrame.InverseTransformPoint(points.passengerDoorGrip.position);
@@ -61,12 +96,19 @@ namespace CarRapide.Vehicle
             if (holdDoor) p.rightHand = InnerGrip;
         }
 
-        IEnumerator Demo()
+        IEnumerator Board()
         {
             experience.CameraDirector.PassengerView();
             motion.Play("Client_Walk");
             if (Mathf.Abs(Mathf.DeltaAngle(Rig.CurrentPose.yaw, 0)) > 1) yield return Turn(0);
-            yield return Walk(.34f);
+            var approach=points.ToLocal(points.passengerOutside);
+            // Stay behind the rear bumper while approaching the entry corridor.
+            var feet=(Rig.CurrentPose.leftFoot+Rig.CurrentPose.rightFoot)*.5f;
+            if(feet.z>approach.z+1.02f)
+                yield return motion.WalkTo(new Vector3(feet.x,feet.y,approach.z+1.02f),.65f);
+            yield return motion.WalkTo(new Vector3(approach.x,Rig.CurrentPose.leftFoot.y,approach.z+1.02f),.65f);
+            if(Mathf.Abs(Mathf.DeltaAngle(Rig.CurrentPose.yaw,0))>1) yield return Turn(0);
+
 
             var p = Rig.CurrentPose;
             p.lean = 27;
@@ -82,10 +124,10 @@ namespace CarRapide.Vehicle
             for(float t=0;t<1.8f;t+=Time.deltaTime)
             { Rig.SetPose(SideStepPose(center,1-t/1.8f)); yield return null; }
             Relax(ref center); Rig.SetPose(center);
-            p=center; p.rightElbowBack=.5f; Relax(ref p,true);
+            p=center; p.rightElbowBack=-.75f; Relax(ref p,true);
             yield return motion.Transition(p,.6f);
             var ground = Rig.CurrentPose;
-            var route = new List<Pose> { ground };
+            route.Clear(); route.Add(ground);
 
             motion.Play("Client_StepUp");
             p = ground;
@@ -95,7 +137,8 @@ namespace CarRapide.Vehicle
             yield return motion.Transition(p, 1.0f, .17f); route.Add(p);
 
             p.pelvis = new Vector3(0, 1.0f, -2.61f);
-            p.rightFoot += new Vector3(0, .20f, .13f);
+            // Keep the toes behind the platform edge before lowering this foot on exit.
+            p.rightFoot += new Vector3(0, .20f, .05f);
             p.lean = 25;
             Relax(ref p, true);
             yield return motion.Transition(p, .85f); route.Add(p);
@@ -139,8 +182,15 @@ namespace CarRapide.Vehicle
             yield return motion.Transition(p, 1.2f);
             IsSeated = true;
             motion.Play("Client_Idle");
-            yield return new WaitForSeconds(1.8f);
+            walkingFrame.SetParent(points.transform,true);
+            IsBusy=false;experience.Engine.PassengerBusy=false;Status="Passager à bord";
+            RestoreCamera();
+        }
 
+        IEnumerator Alight()
+        {
+            experience.CameraDirector.PassengerView();
+            var p=Rig.CurrentPose;
             IsSeated = false;
             motion.Play("Client_Walk");
             // Stand, turn in the aisle, then descend facing the vehicle with a hand on the door.
@@ -156,27 +206,19 @@ namespace CarRapide.Vehicle
             p = Rig.CurrentPose; p.lean = 0; Relax(ref p);
             yield return motion.Transition(p, .6f);
             yield return Turn(180);
-            yield return Walk(-.34f);
+            var feet=(Rig.CurrentPose.leftFoot+Rig.CurrentPose.rightFoot)*.5f;
+            yield return motion.WalkTo(feet+Vector3.back*1.02f,.65f);
             motion.Play("Client_Idle");
             IsBusy = false;
             experience.Engine.PassengerBusy = false;
-            if (experience.Driver.IsSeated) experience.CameraDirector.SeatedView();
-            else experience.CameraDirector.ExteriorView();
+            walkingFrame.SetParent(null,true);pedestrian.SetInteracting(false);Status="En attente";
+            RestoreCamera();
         }
-
-        IEnumerator Walk(float distance)
+        void RestoreCamera()
         {
-            var p = Rig.CurrentPose;
-            var steps=new DriverAnimationController.Step[6];
-            for(int i=0;i<steps.Length;i++)
-            {
-                bool left=i%2==0;
-                p.pelvis.z+=distance*.5f;
-                if(left) p.leftFoot.z+=distance; else p.rightFoot.z+=distance;
-                Relax(ref p);
-                steps[i]=new DriverAnimationController.Step(p,.6f,left?.08f:0,left?0:.08f);
-            }
-            yield return motion.Sequence(steps);
+            if(experience.Engine.IsRunning) experience.CameraDirector.DrivingView();
+            else if (experience.Driver.IsSeated) experience.CameraDirector.SeatedView();
+            else experience.CameraDirector.ExteriorView();
         }
 
         IEnumerator Turn(float yaw)
@@ -223,7 +265,7 @@ namespace CarRapide.Vehicle
                 float u=DriverAnimationController.Smooth(t/1.4f);
                 SetRearDoor(-105*u);
                 var p=start; Relax(ref p);
-                p.rightHand=Vector3.Lerp(DoorGrip,p.pelvis+new Vector3(.16f,.1f,-.03f),DriverAnimationController.Smooth((u-.12f)/.18f));
+                p.rightHand=Vector3.Lerp(DoorGrip,p.pelvis+new Vector3(.24f,0,.12f),DriverAnimationController.Smooth((u-.12f)/.18f));
                 Rig.SetPose(p);
                 yield return null;
             }
@@ -240,7 +282,7 @@ namespace CarRapide.Vehicle
                 SetRearDoor(-105+10*DriverAnimationController.Smooth(u/.2f)+95*DriverAnimationController.Smooth((u-.65f)/.35f));
                 var p=SideStepPose(center,u);
                 p.rightElbowBack=center.rightElbowBack*(1-DriverAnimationController.Smooth(u/.4f));
-                p.rightHand=Vector3.Lerp(InnerGrip,p.pelvis+new Vector3(.16f,.1f,-.03f),DriverAnimationController.Smooth(u/.25f));
+                p.rightHand=Vector3.Lerp(InnerGrip,p.pelvis+new Vector3(.24f,0,.12f),DriverAnimationController.Smooth(u/.25f));
                 Rig.SetPose(p); yield return null;
             }
             SetRearDoor(0);
